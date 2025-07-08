@@ -1,7 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import './App.css'; // Importa o arquivo CSS
+import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import './App.css';
+import {
+  db,
+  auth,
+  appId,
+  initializeAuth,
+  loginWithGoogle,
+  registerWithEmail,
+  loginWithEmail,
+  logout
+} from './firebaseconfig'; // Importa as novas funções de autenticação
+import { collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
-// Dados de exemplo para eventos e tipos de evento
+// Dados de exemplo para tipos de evento e status
 const eventTypes = [
   'Palestra',
   'Semana Acadêmica',
@@ -18,34 +31,194 @@ const eventStatuses = [
   'Cancelado',
 ];
 
+// Componente para o formulário de autenticação (Login/Registro)
+const AuthForm = ({ openMessageModal }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const navigate = useNavigate(); // Hook para navegação
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    try {
+      await registerWithEmail(email, password);
+      openMessageModal('Registro realizado com sucesso! Você está logado.');
+      navigate('/admin'); // Redireciona para a página de administração após o registro
+    } catch (error) {
+      openMessageModal(`Erro no registro: ${error.message}`);
+    }
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      await loginWithEmail(email, password);
+      openMessageModal('Login realizado com sucesso!');
+      navigate('/admin'); // Redireciona para a página de administração após o login
+    } catch (error) {
+      openMessageModal(`Erro no login: ${error.message}`);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    try {
+      await loginWithGoogle();
+      openMessageModal('Login com Google realizado com sucesso!');
+      navigate('/admin'); // Redireciona para a página de administração após o login
+    } catch (error) {
+      openMessageModal(`Erro no login com Google: ${error.message}`);
+    }
+  };
+
+  return (
+    <div className="auth-page-container"> {/* Novo container para a página de auth */}
+      <div className="content-card auth-form-container">
+        <h2 className="section-title">Acesso Administrativo</h2>
+        <form onSubmit={handleLogin} className="form-grid auth-grid">
+          <div>
+            <label htmlFor="email" className="form-label">
+              E-mail
+            </label>
+            <input
+              type="email"
+              id="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="form-input"
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="password" className="form-label">
+              Senha
+            </label>
+            <input
+              type="password"
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="form-input"
+              required
+            />
+          </div>
+          <div className="md-col-span-2 form-actions auth-actions">
+            <button type="submit" className="button-primary">
+              Entrar
+            </button>
+            <button type="button" onClick={handleRegister} className="button-secondary">
+              Registrar
+            </button>
+          </div>
+        </form>
+        <div className="auth-separator">
+          <span>OU</span>
+        </div>
+        <button onClick={handleGoogleLogin} className="button-google">
+          Entrar com Google
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// NOVO COMPONENTE: Para lidar com o status de autenticação e botão de logout
+const AuthStatusAndLogoutButton = ({ currentUser, openMessageModal }) => {
+  const navigate = useNavigate(); // useNavigate agora está dentro de um componente filho de BrowserRouter
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      openMessageModal('Logout realizado com sucesso!');
+      navigate('/participante'); // Redireciona para a página de participante após o logout
+    } catch (error) {
+      openMessageModal(`Erro ao fazer logout: ${error.message}`);
+    }
+  };
+
+  return (
+    <>
+      {currentUser && ( // Mostra o botão de logout se houver um usuário logado
+        <button onClick={handleLogout} className="nav-button">
+          Sair ({currentUser.email || 'Anônimo'})
+        </button>
+      )}
+    </>
+  );
+};
+
+
 // Componente principal do aplicativo
 function App() {
-  // Estado para controlar a página atual (admin ou participante)
-  const [currentPage, setCurrentPage] = useState('participante'); // Inicia na visão de participante
-  // Estado para armazenar os eventos (dados simulados em memória)
+  // Estado para armazenar os eventos
   const [events, setEvents] = useState([]);
   // Estado para armazenar o evento atualmente selecionado para edição
   const [editingEvent, setEditingEvent] = useState(null);
-  // Estado para controlar a visibilidade do modal de detalhes/inscrição
+  // Estado para controlar a visibilidade do modal de detalhes/inscrição (para participante)
   const [showEventModal, setShowEventModal] = useState(false);
-  // Estado para o evento selecionado no modal
+  // Estado para o evento selecionado no modal de detalhes (para participante)
   const [selectedEvent, setSelectedEvent] = useState(null);
+  // NOVO ESTADO: para o evento selecionado para ver inscrições (para admin)
+  const [eventToViewInscricoes, setEventToViewInscricoes] = useState(null);
   // Estado para a mensagem de confirmação
   const [message, setMessage] = useState('');
   // Estado para controlar a visibilidade do modal de confirmação
   const [showMessageModal, setShowMessageModal] = useState(false);
+  // Estado para armazenar o ID do usuário autenticado
+  const [userId, setUserId] = useState(null);
+  // Estado para saber quando a autenticação está pronta
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  // NOVO: Estado para armazenar o usuário logado
+  const [currentUser, setCurrentUser] = useState(null);
+  // REMOVIDO: const navigate = useNavigate(); // Este hook não pode ser chamado aqui
 
-  // Efeito para carregar dados iniciais (simulados)
-  useEffect(() => {
-    // Carrega eventos do localStorage se existirem, caso contrário, usa um array vazio
-    const storedEvents = JSON.parse(localStorage.getItem('organizauni_events')) || [];
-    setEvents(storedEvents);
-  }, []);
 
-  // Efeito para salvar eventos no localStorage sempre que o estado 'events' mudar
+  // Efeito para inicializar a autenticação Firebase e configurar o listener de estado de autenticação
   useEffect(() => {
-    localStorage.setItem('organizauni_events', JSON.stringify(events));
-  }, [events]);
+    initializeAuth(); // Chama a função de inicialização de autenticação
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setCurrentUser(user); // Define o usuário logado
+      } else {
+        setUserId(crypto.randomUUID()); // Gera um UUID aleatório para usuários não autenticados
+        setCurrentUser(null); // Limpa o usuário logado
+      }
+      setIsAuthReady(true); // Marca a autenticação como pronta
+    });
+
+    return () => unsubscribeAuth(); // Limpa o listener ao desmontar o componente
+  }, []); // Executa apenas uma vez na montagem inicial
+
+  // Efeito para redirecionar se o usuário tentar acessar /admin sem autenticação
+  // Este useEffect agora está em AuthRedirector, que é um componente filho de BrowserRouter
+  // e, portanto, pode usar useNavigate.
+
+  // Efeito para carregar eventos do Firestore (executa apenas quando a autenticação está pronta)
+  useEffect(() => {
+    // Só tenta carregar se a autenticação estiver pronta e userId existir
+    if (!isAuthReady || !userId) {
+      console.log("Autenticação não pronta ou userId ausente, pulando a busca de eventos.");
+      return;
+    }
+
+    // Caminho da coleção para dados públicos (eventos)
+    const eventsCollectionRef = collection(db, `artifacts/${appId}/public/data/events`);
+
+    // Listener em tempo real para a coleção de eventos
+    const unsubscribeFirestore = onSnapshot(eventsCollectionRef, (snapshot) => {
+      const fetchedEvents = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setEvents(fetchedEvents);
+      console.log("[App] Eventos carregados do Firestore (raw):", fetchedEvents); // Log de dados brutos do Firestore
+    }, (error) => {
+      console.error("Erro ao buscar eventos do Firestore:", error);
+      openMessageModal('Erro ao carregar eventos. Verifique sua conexão ou permissões.');
+    });
+
+    return () => unsubscribeFirestore(); // Limpa o listener ao desmontar
+  }, [db, isAuthReady, userId, appId]); // Dependências para re-executar o efeito
 
   // Função para abrir o modal de mensagem
   const openMessageModal = (msg) => {
@@ -59,81 +232,111 @@ function App() {
     setMessage('');
   };
 
-  // Função para adicionar ou atualizar um evento
-  const handleSaveEvent = (eventData) => {
-    if (eventData.id) {
-      // Atualiza evento existente
-      setEvents(events.map((e) => (e.id === eventData.id ? eventData : e)));
-      openMessageModal('Evento atualizado com sucesso!');
-    } else {
-      // Adiciona novo evento com um ID único e inicializa inscrições
-      const newEvent = {
-        ...eventData,
-        id: Date.now(), // ID simples baseado no timestamp
-        inscricoes: [], // Array para armazenar inscrições
-        vagasDisponiveis: eventData.vagasDisponiveis, // Garante que vagasDisponiveis seja um número
-      };
-      setEvents([...events, newEvent]);
-      openMessageModal('Evento cadastrado com sucesso!');
+  // Função para adicionar ou atualizar um evento no Firestore
+  const handleSaveEvent = async (eventData) => {
+    if (!isAuthReady || !currentUser || currentUser.isAnonymous) { // Requer usuário autenticado (NÃO anônimo) para salvar
+      openMessageModal('Você precisa estar logado com uma conta de administrador para realizar esta ação.');
+      return;
     }
-    setEditingEvent(null); // Limpa o evento em edição
+
+    try {
+      if (eventData.id && typeof eventData.id === 'string') {
+        const eventRef = doc(db, `artifacts/${appId}/public/data/events`, eventData.id);
+        await updateDoc(eventRef, eventData);
+        openMessageModal('Evento atualizado com sucesso no Firestore!');
+      } else {
+        const eventsCollectionRef = collection(db, `artifacts/${appId}/public/data/events`);
+        await addDoc(eventsCollectionRef, { ...eventData, inscricoes: [] });
+        openMessageModal('Evento cadastrado com sucesso no Firestore!');
+      }
+      setEditingEvent(null);
+    } catch (error) {
+      console.error("Erro ao salvar evento no Firestore:", error);
+      openMessageModal('Erro ao salvar evento. Verifique o console e as regras de segurança do Firebase.');
+    }
   };
 
-  // Função para excluir um evento
-  const handleDeleteEvent = (id) => {
+  // Função para excluir um evento do Firestore
+  const handleDeleteEvent = async (id) => {
+    if (!isAuthReady || !currentUser || currentUser.isAnonymous) { // Requer usuário autenticado (NÃO anônimo) para excluir
+      openMessageModal('Você precisa estar logado com uma conta de administrador para realizar esta ação.');
+      return;
+    }
     if (window.confirm('Tem certeza que deseja excluir este evento?')) {
-      setEvents(events.filter((e) => e.id !== id));
-      openMessageModal('Evento excluído com sucesso!');
+      try {
+        const eventRef = doc(db, `artifacts/${appId}/public/data/events`, id);
+        await deleteDoc(eventRef);
+        openMessageModal('Evento excluído com sucesso do Firestore!');
+      } catch (error) {
+        console.error("Erro ao excluir evento do Firestore:", error);
+        openMessageModal('Erro ao excluir evento. Verifique o console e as regras de segurança do Firebase.');
+      }
     }
   };
 
-  // Função para publicar/despublicar um evento
-  const handleTogglePublish = (id) => {
-    setEvents(
-      events.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              status:
-                e.status === 'Aberto para Inscrições'
-                  ? 'Rascunho'
-                  : 'Aberto para Inscrições',
-            }
-          : e
-      )
-    );
-    openMessageModal('Status do evento atualizado!');
+  // Função para publicar/despublicar um evento (atualiza o status no Firestore)
+  const handleTogglePublish = async (id) => {
+    if (!isAuthReady || !currentUser || currentUser.isAnonymous) { // Requer usuário autenticado (NÃO anônimo) para publicar/despublicar
+      openMessageModal('Você precisa estar logado com uma conta de administrador para realizar esta ação.');
+      return;
+    }
+    try {
+      const eventRef = doc(db, `artifacts/${appId}/public/data/events`, id);
+      const eventDoc = await getDoc(eventRef);
+      if (eventDoc.exists()) {
+        const currentStatus = eventDoc.data().status;
+        const newStatus = currentStatus === 'Aberto para Inscrições' ? 'Rascunho' : 'Aberto para Inscrições';
+        await updateDoc(eventRef, { status: newStatus });
+        openMessageModal(`Status do evento atualizado para: ${newStatus}!`);
+      }
+    } catch (error) {
+      console.error("Erro ao atualizar status do evento no Firestore:", error);
+      openMessageModal('Erro ao atualizar status. Verifique o console e as regras de segurança do Firebase.');
+    }
   };
 
-  // Função para abrir o modal de detalhes do evento
+  // Função para abrir o modal de detalhes do evento (para participante)
   const openEventDetails = (event) => {
     setSelectedEvent(event);
     setShowEventModal(true);
   };
 
-  // Função para fechar o modal de detalhes do evento
+  // Função para fechar o modal de detalhes do evento (para participante)
   const closeEventDetails = () => {
     setSelectedEvent(null);
     setShowEventModal(false);
   };
 
-  // Função para lidar com a inscrição em um evento
-  const handleRegister = (eventId, participantData) => {
-    setEvents(
-      events.map((event) => {
-        if (event.id === eventId) {
-          if (event.inscricoes.length < event.vagasDisponiveis) {
-            const newInscricoes = [...event.inscricoes, participantData];
-            openMessageModal('Inscrição realizada com sucesso!');
-            return { ...event, inscricoes: newInscricoes };
-          } else {
-            openMessageModal('Desculpe, as vagas para este evento estão esgotadas.');
-          }
+  // Função para lidar com a inscrição em um evento (atualiza o array de inscrições no Firestore)
+  const handleRegister = async (eventId, participantData) => {
+    if (!isAuthReady || !userId) { // A inscrição não requer um currentUser, apenas que a autenticação esteja pronta
+      openMessageModal('Autenticação não pronta. Tente novamente.');
+      return;
+    }
+
+    try {
+      const eventRef = doc(db, `artifacts/${appId}/public/data/events`, eventId);
+      const eventDoc = await getDoc(eventRef);
+
+      if (eventDoc.exists()) {
+        const eventData = eventDoc.data();
+        const currentInscricoes = eventData.inscricoes || [];
+
+        if (currentInscricoes.length < eventData.vagasDisponiveis) {
+          const newInscricoes = [...currentInscricoes, participantData];
+          await updateDoc(eventRef, { inscricoes: newInscricoes });
+          openMessageModal('Inscrição realizada com sucesso!');
+        } else {
+          openMessageModal('Desculpe, as vagas para este evento estão esgotadas.');
         }
-        return event;
-      })
-    );
-    closeEventDetails(); // Fecha o modal após a inscrição
+      } else {
+        openMessageModal('Evento não encontrado.');
+      }
+      closeEventDetails();
+    } catch (error) {
+      console.error("Erro ao registrar no evento no Firestore:", error);
+      openMessageModal('Erro ao registrar. Verifique o console e as regras de segurança do Firebase.');
+    }
   };
 
   // Componente de Mensagem Modal
@@ -165,59 +368,62 @@ function App() {
         vagasDisponiveis: 0,
         status: eventStatuses[0],
         requisitosInscricao: '',
-        imagemBanner: '',
+        imagemBanner: '', // Valor inicial vazio para ser opcional
         departamento: '',
-        inscricoes: [], // Inicializa como array vazio
       }
     );
 
-    // Atualiza o estado do formulário quando o evento de edição muda
     useEffect(() => {
-      setFormData(
-        event || {
-          titulo: '',
-          tipo: eventTypes[0],
-          descricao: '',
-          dataInicio: '',
-          dataFim: '',
-          local: '',
-          palestrantes: '',
-          vagasDisponiveis: 0,
-          status: eventStatuses[0],
-          requisitosInscricao: '',
-          imagemBanner: '',
-          departamento: '',
-          inscricoes: [],
-        }
-      );
+      // Garante que 'tipo' sempre tenha um valor válido ao carregar/resetar o formulário
+      const initialType = (event && event.tipo !== undefined) ? event.tipo : eventTypes[0];
+      const newFormData = event
+        ? { ...event, tipo: initialType }
+        : {
+            titulo: '',
+            tipo: initialType, // Garante que o tipo seja 'Palestra' por padrão
+            descricao: '',
+            dataInicio: '',
+            dataFim: '',
+            local: '',
+            palestrantes: '',
+            vagasDisponiveis: 0,
+            status: eventStatuses[0],
+            requisitosInscricao: '',
+            imagemBanner: '',
+            departamento: '',
+          };
+      console.log("[EventForm] Initializing formData with tipo:", newFormData.tipo);
+      setFormData(newFormData);
     }, [event]);
 
     const handleChange = (e) => {
       const { name, value, type, checked } = e.target;
+      console.log(`[EventForm] handleChange - Name: ${name}, Value: "${value}"`); // Log detalhado
       setFormData({
         ...formData,
-        [name]: type === 'checkbox' ? checked : value,
+        [name]: type === 'checkbox' ? checked : (typeof value === 'string' ? value.trim() : value), // Adicionado .trim()
       });
     };
 
     const handleSubmit = (e) => {
       e.preventDefault();
-      // Validação básica
+      console.log("[EventForm] Submitting formData.tipo:", formData.tipo); // Log antes de salvar
       if (
         !formData.titulo ||
         !formData.dataInicio ||
         !formData.dataFim ||
         !formData.local ||
-        !formData.vagasDisponiveis
+        !formData.vagasDisponiveis ||
+        formData.vagasDisponiveis < 0
       ) {
-        openMessageModal('Por favor, preencha todos os campos obrigatórios.');
+        openMessageModal('Por favor, preencha todos os campos obrigatórios e garanta que as vagas sejam um número positivo.');
         return;
       }
       onSave(formData);
     };
 
     return (
-      <div className="form-container">
+      <div className="content-card">
         <h2 className="section-title">
           {event ? 'Editar Evento' : 'Cadastrar Novo Evento'}
         </h2>
@@ -370,16 +576,19 @@ function App() {
           </div>
           <div className="md-col-span-2">
             <label htmlFor="imagemBanner" className="form-label">
-              URL da Imagem de Destaque/Banner
+              Imagem de Destaque/Banner (URL ou Anexo - Opcional)
             </label>
             <input
-              type="url"
+              type="text"
               id="imagemBanner"
               name="imagemBanner"
               value={formData.imagemBanner}
               onChange={handleChange}
               className="form-input"
             />
+            <p className="text-sm text-gray-500 mt-1">
+              * Para anexos, insira um texto descritivo. A funcionalidade de upload de arquivo real não é suportada neste ambiente.
+            </p>
           </div>
           <div className="md-col-span-2">
             <label htmlFor="departamento" className="form-label">
@@ -427,7 +636,7 @@ function App() {
     });
 
     return (
-      <div className="admin-list-container">
+      <div className="content-card">
         <h2 className="section-title">Gestão de Eventos</h2>
         <div className="filter-bar">
           <input
@@ -450,7 +659,8 @@ function App() {
             ))}
           </select>
           <button
-            onClick={() => setEditingEvent({})} // Inicia um novo cadastro
+            onClick={() => setEditingEvent({})
+            } // Inicia um novo cadastro
             className="button-add-event"
           >
             Cadastrar Novo Evento
@@ -484,7 +694,7 @@ function App() {
                     </td>
                     <td className="table-cell">{event.local}</td>
                     <td className="table-cell">{event.vagasDisponiveis}</td>
-                    <td className="table-cell">{event.inscricoes.length}</td>
+                    <td className="table-cell">{event.inscricoes ? event.inscricoes.length : 0}</td>
                     <td className="table-cell">{event.status}</td>
                     <td className="table-cell">
                       <div className="table-actions">
@@ -534,11 +744,11 @@ function App() {
 
     return (
       <div className="modal-overlay">
-        <div className="inscricoes-modal-content">
+        <div className="modal-content inscricoes-modal-content">
           <h2 className="section-title">
             Inscritos para: {event.titulo}
           </h2>
-          {event.inscricoes.length === 0 ? (
+          {(!event.inscricoes || event.inscricoes.length === 0) ? (
             <p className="no-events-message">Nenhuma inscrição ainda.</p>
           ) : (
             <div className="table-responsive">
@@ -603,7 +813,7 @@ function App() {
 
     if (!event) return null;
 
-    const vagasRestantes = event.vagasDisponiveis - event.inscricoes.length;
+    const vagasRestantes = event.vagasDisponiveis - (event.inscricoes ? event.inscricoes.length : 0);
     const isFull = vagasRestantes <= 0;
 
     return (
@@ -753,7 +963,7 @@ function App() {
     });
 
     return (
-      <div className="participant-list-container">
+      <div className="content-card">
         <h2 className="section-title">Eventos Disponíveis</h2>
         <div className="filter-bar">
           <input
@@ -800,8 +1010,10 @@ function App() {
                 <div className="event-card-body">
                   <h3 className="event-card-title">{event.titulo}</h3>
                   <p className="event-card-text">
-                    <span className="event-detail-label">Tipo:</span> {event.tipo}
+                    <span className="event-detail-label">Tipo:</span> {event.tipo || 'Não informado'}
                   </p>
+                  {/* Adicionado console.log para verificar o valor do tipo ao renderizar */}
+                  {console.log(`[ParticipantEventList] Evento ID: ${event.id}, Tipo: "${event.tipo}"`)}
                   <p className="event-card-text">
                     <span className="event-detail-label">Data:</span>{' '}
                     {new Date(event.dataInicio).toLocaleDateString()}
@@ -811,7 +1023,7 @@ function App() {
                   </p>
                   <p className="event-card-text">
                     <span className="event-detail-label">Vagas:</span>{' '}
-                    {event.vagasDisponiveis - event.inscricoes.length} de {event.vagasDisponiveis} restantes
+                    {event.vagasDisponiveis - (event.inscricoes ? event.inscricoes.length : 0)} de {event.vagasDisponiveis} restantes
                   </p>
                   <button
                     onClick={() => onSelectEvent(event)}
@@ -830,75 +1042,83 @@ function App() {
 
   // Renderização principal do App
   return (
-    <div className="app-container">
-      <header className="header">
-        <div className="header-content">
-          <h1 className="header-title">OrganizaUni</h1>
-          <nav className="nav-buttons">
-            <button
-              onClick={() => setCurrentPage('participante')}
-              className={`nav-button ${
-                currentPage === 'participante' ? 'nav-button-active' : ''
-              }`}
-            >
-              Portal do Participante
-            </button>
-            <button
-              onClick={() => setCurrentPage('admin')}
-              className={`nav-button ${
-                currentPage === 'admin' ? 'nav-button-active' : ''
-              }`}
-            >
-              Administração
-            </button>
-          </nav>
-        </div>
-      </header>
+    <BrowserRouter>
+      <div className="app-container">
+        <header className="header">
+          <div className="header-content">
+            <h1 className="header-title">OrganizaUni</h1>
+            <nav className="nav-buttons">
+              <Link to="/participante" className="nav-button">
+                Portal do Participante
+              </Link>
+              <Link to="/admin" className="nav-button">
+                Administração
+              </Link>
+              {/* Renderiza o novo componente AuthStatusAndLogoutButton aqui */}
+              <AuthStatusAndLogoutButton currentUser={currentUser} openMessageModal={openMessageModal} />
+            </nav>
+          </div>
+        </header>
 
-      <main className="main-content">
-        {currentPage === 'admin' && (
-          <>
-            {editingEvent ? (
-              <EventForm
-                event={editingEvent}
-                onSave={handleSaveEvent}
-                onCancel={() => setEditingEvent(null)}
-              />
-            ) : (
-              <AdminEventList
-                events={events}
-                onEdit={setEditingEvent}
-                onDelete={handleDeleteEvent}
-                onTogglePublish={handleTogglePublish}
-                onViewInscricoes={setSelectedEvent} // Passa o evento para o estado de seleção
-              />
-            )}
-          </>
+        <main className="main-content">
+          <Routes>
+            <Route path="/" element={<ParticipantEventList events={events} onSelectEvent={openEventDetails} />} />
+            <Route path="/participante" element={<ParticipantEventList events={events} onSelectEvent={openEventDetails} />} />
+            <Route path="/login" element={<AuthForm openMessageModal={openMessageModal} />} /> {/* Nova rota para o formulário de login */}
+            <Route
+              path="/admin"
+              element={
+                currentUser && !currentUser.isAnonymous ? ( // AGORA: Verifica se o usuário NÃO é anônimo
+                  editingEvent ? (
+                    <EventForm
+                      event={editingEvent}
+                      onSave={handleSaveEvent}
+                      onCancel={() => setEditingEvent(null)}
+                    />
+                  ) : (
+                    <AdminEventList
+                      events={events}
+                      onEdit={setEditingEvent}
+                      onDelete={handleDeleteEvent}
+                      onTogglePublish={handleTogglePublish}
+                      onViewInscricoes={setEventToViewInscricoes} // AQUI: Usa o novo estado para admin
+                    />
+                  )
+                ) : ( // Se não estiver logado ou for anônimo, redireciona para /login
+                  <AuthRedirector /> // Componente para redirecionar para /login
+                )
+              }
+            />
+          </Routes>
+        </main>
+
+        {/* Modais */}
+        {showEventModal && (
+          <EventDetailsModal
+            event={selectedEvent}
+            onClose={closeEventDetails}
+            onRegister={handleRegister}
+          />
         )}
 
-        {currentPage === 'participante' && (
-          <ParticipantEventList events={events} onSelectEvent={openEventDetails} />
+        {/* NOVO: Modal de Lista de Inscritos para Admin, controlado por eventToViewInscricoes */}
+        {eventToViewInscricoes && (
+          <InscricoesList event={eventToViewInscricoes} onClose={() => setEventToViewInscricoes(null)} />
         )}
-      </main>
 
-      {/* Modal de Detalhes/Inscrição para Participantes */}
-      {showEventModal && (
-        <EventDetailsModal
-          event={selectedEvent}
-          onClose={closeEventDetails}
-          onRegister={handleRegister}
-        />
-      )}
-
-      {/* Modal de Lista de Inscritos para Admin */}
-      {selectedEvent && currentPage === 'admin' && (
-        <InscricoesList event={selectedEvent} onClose={() => setSelectedEvent(null)} />
-      )}
-
-      {/* Modal de Mensagem */}
-      {showMessageModal && <MessageModal message={message} onClose={closeMessageModal} />}
-    </div>
+        {showMessageModal && <MessageModal message={message} onClose={closeMessageModal} />}
+      </div>
+    </BrowserRouter>
   );
 }
+
+// Componente auxiliar para redirecionar para a página de login
+const AuthRedirector = () => {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate('/login');
+  }, [navigate]);
+  return null; // Não renderiza nada
+};
 
 export default App;
