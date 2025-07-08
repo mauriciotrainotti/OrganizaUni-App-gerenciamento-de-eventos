@@ -1,0 +1,21 @@
+    [build]
+      # Comando que o Netlify deve executar para construir seu aplicativo React
+      # Se você usa create-react-app:
+      command = "npm run build"
+      # Se você usa Vite (ou outro bundler que gera 'dist'):
+      # command = "npm run build"
+
+      # Diretório onde os arquivos de build são gerados
+      # Para create-react-app:
+      publish = "build"
+      # Para Vite (ou outro bundler que gera 'dist'):
+      # publish = "dist"
+
+    [[redirects]]
+      # Redireciona todas as requisições para o index.html
+      # Isso é crucial para Single Page Applications (SPAs) como o React Router
+      from = "/*"
+      to = "/index.html"
+      status = 200
+      force = false # Não força o redirecionamento se um arquivo existir
+    
