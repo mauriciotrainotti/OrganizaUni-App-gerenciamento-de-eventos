@@ -10,9 +10,11 @@ import {
   registerWithEmail,
   loginWithEmail,
   logout
-} from './firebaseconfig'; // Importa as novas funções de autenticação
+} from './firebaseConfig'; // Importa as novas funções de autenticação
 import { collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
+
+// REMOVIDO: import OrganizaUniLogo from './organizauni_logo.jpg';
 
 // Dados de exemplo para tipos de evento e status
 const eventTypes = [
@@ -145,6 +147,102 @@ const AuthStatusAndLogoutButton = ({ currentUser, openMessageModal }) => {
   );
 };
 
+// NOVO COMPONENTE: Lista de Presença
+const AttendanceListModal = ({ event, onClose, openMessageModal }) => {
+  const [attendance, setAttendance] = useState([]);
+  // const navigate = useNavigate(); // Removido, pois não é usado diretamente aqui
+
+  useEffect(() => {
+    // Inicializa o estado de presença com base nas inscrições existentes
+    if (event && event.inscricoes) {
+      setAttendance(event.inscricoes.map(inscrito => ({
+        ...inscrito,
+        present: inscrito.present !== undefined ? inscrito.present : false // Garante que 'present' seja booleano
+      })));
+    }
+  }, [event]);
+
+  const handleCheckboxChange = (index) => {
+    setAttendance(prevAttendance =>
+      prevAttendance.map((item, i) =>
+        i === index ? { ...item, present: !item.present } : item
+      )
+    );
+  };
+
+  const handleSaveAttendance = async () => {
+    if (!event || !event.id) {
+      openMessageModal('Erro: Evento não encontrado para salvar a lista de presença.');
+      return;
+    }
+
+    try {
+      const eventRef = doc(db, `artifacts/${appId}/public/data/events`, event.id);
+      await updateDoc(eventRef, { inscricoes: attendance }); // Salva o array de inscrições atualizado
+      openMessageModal('Lista de presença salva com sucesso!');
+      onClose(); // Fecha o modal após salvar
+    } catch (error) {
+      console.error("Erro ao salvar lista de presença no Firestore:", error);
+      openMessageModal('Erro ao salvar lista de presença. Verifique o console e as regras de segurança do Firebase.');
+    }
+  };
+
+  if (!event) return null;
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-content attendance-modal-content">
+        <h2 className="section-title">Lista de Presença: {event.titulo}</h2>
+        {attendance.length === 0 ? (
+          <p className="no-events-message">Nenhuma inscrição para este evento.</p>
+        ) : (
+          <div className="table-responsive">
+            <table className="data-table">
+              <thead className="table-header">
+                <tr>
+                  <th className="table-header-cell">Nome</th>
+                  <th className="table-header-cell">E-mail</th>
+                  <th className="table-header-cell">Presente</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attendance.map((inscrito, index) => (
+                  <tr key={index} className="table-row">
+                    <td className="table-cell">{inscrito.nomeCompleto}</td>
+                    <td className="table-cell">{inscrito.email}</td>
+                    <td className="table-cell">
+                      <input
+                        type="checkbox"
+                        checked={inscrito.present}
+                        onChange={() => handleCheckboxChange(index)}
+                        className="attendance-checkbox"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="form-actions">
+          <button
+            onClick={handleSaveAttendance}
+            className="button-primary"
+          >
+            Salvar Presença
+          </button>
+          <button
+            onClick={onClose}
+            className="button-secondary"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
 // Componente principal do aplicativo
 function App() {
@@ -158,6 +256,8 @@ function App() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   // NOVO ESTADO: para o evento selecionado para ver inscrições (para admin)
   const [eventToViewInscricoes, setEventToViewInscricoes] = useState(null);
+  // NOVO ESTADO: para o evento selecionado para ver lista de presença (para admin)
+  const [eventToViewAttendance, setEventToViewAttendance] = useState(null);
   // Estado para a mensagem de confirmação
   const [message, setMessage] = useState('');
   // Estado para controlar a visibilidade do modal de confirmação
@@ -323,7 +423,8 @@ function App() {
         const currentInscricoes = eventData.inscricoes || [];
 
         if (currentInscricoes.length < eventData.vagasDisponiveis) {
-          const newInscricoes = [...currentInscricoes, participantData];
+          // Adiciona o novo inscrito, garantindo que 'present' seja false por padrão
+          const newInscricoes = [...currentInscricoes, { ...participantData, present: false }];
           await updateDoc(eventRef, { inscricoes: newInscricoes });
           openMessageModal('Inscrição realizada com sucesso!');
         } else {
@@ -625,7 +726,7 @@ function App() {
   };
 
   // Componente para a lista de eventos no Back-office
-  const AdminEventList = ({ events, onEdit, onDelete, onTogglePublish, onViewInscricoes }) => {
+  const AdminEventList = ({ events, onEdit, onDelete, onTogglePublish, onViewInscricoes, onViewAttendance }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [filterType, setFilterType] = useState('Todos');
 
@@ -726,6 +827,13 @@ function App() {
                         >
                           Inscritos
                         </button>
+                        {/* NOVO BOTÃO: Lista de Presença */}
+                        <button
+                          onClick={() => onViewAttendance(event)}
+                          className="button-view-attendance"
+                        >
+                          Lista de Presença
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -742,6 +850,35 @@ function App() {
   const InscricoesList = ({ event, onClose }) => {
     if (!event) return null;
 
+    // Função para imprimir a lista de inscritos
+    const handlePrint = () => {
+      const printableContent = document.createElement('div');
+      printableContent.innerHTML = `
+        <style>
+          /* Estilos básicos para impressão */
+          body { font-family: 'Inter', sans-serif; margin: 20px; }
+          h2 { font-size: 24px; margin-bottom: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+          th { background-color: #f2f2f2; }
+          .print-header { text-align: center; margin-bottom: 30px; }
+          .print-header img { max-height: 50px; margin-bottom: 10px; }
+        </style>
+        <div class="print-header">
+          <h2>Lista de Inscritos: ${event.titulo}</h2>
+          <p>Data: ${new Date().toLocaleDateString()}</p>
+        </div>
+        ${document.getElementById('inscritos-table').outerHTML}
+      `;
+
+      const printWindow = window.open('', '', 'height=600,width=800');
+      printWindow.document.write(printableContent.outerHTML);
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+      // printWindow.close(); // Pode fechar automaticamente após a impressão em alguns navegadores
+    };
+
     return (
       <div className="modal-overlay">
         <div className="modal-content inscricoes-modal-content">
@@ -752,7 +889,7 @@ function App() {
             <p className="no-events-message">Nenhuma inscrição ainda.</p>
           ) : (
             <div className="table-responsive">
-              <table className="data-table">
+              <table id="inscritos-table" className="data-table"> {/* Adicionado ID para impressão */}
                 <thead className="table-header">
                   <tr>
                     <th className="table-header-cell">Nome</th>
@@ -775,6 +912,12 @@ function App() {
             </div>
           )}
           <div className="form-actions">
+            <button
+              onClick={handlePrint}
+              className="button-print" // Nova classe para o botão de impressão
+            >
+              Imprimir Lista
+            </button>
             <button
               onClick={onClose}
               className="button-primary"
@@ -1046,6 +1189,7 @@ function App() {
       <div className="app-container">
         <header className="header">
           <div className="header-content">
+            {/* Revertido para o texto OrganizaUni */}
             <h1 className="header-title">OrganizaUni</h1>
             <nav className="nav-buttons">
               <Link to="/participante" className="nav-button">
@@ -1082,6 +1226,7 @@ function App() {
                       onDelete={handleDeleteEvent}
                       onTogglePublish={handleTogglePublish}
                       onViewInscricoes={setEventToViewInscricoes} // AQUI: Usa o novo estado para admin
+                      onViewAttendance={setEventToViewAttendance} // NOVO: Passa a função para abrir a lista de presença
                     />
                   )
                 ) : ( // Se não estiver logado ou for anônimo, redireciona para /login
@@ -1104,6 +1249,15 @@ function App() {
         {/* NOVO: Modal de Lista de Inscritos para Admin, controlado por eventToViewInscricoes */}
         {eventToViewInscricoes && (
           <InscricoesList event={eventToViewInscricoes} onClose={() => setEventToViewInscricoes(null)} />
+        )}
+
+        {/* NOVO: Modal de Lista de Presença para Admin, controlado por eventToViewAttendance */}
+        {eventToViewAttendance && (
+          <AttendanceListModal
+            event={eventToViewAttendance}
+            onClose={() => setEventToViewAttendance(null)}
+            openMessageModal={openMessageModal} // Passa a função de mensagem
+          />
         )}
 
         {showMessageModal && <MessageModal message={message} onClose={closeMessageModal} />}
