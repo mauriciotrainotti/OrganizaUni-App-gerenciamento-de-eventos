@@ -14,8 +14,6 @@ import {
 import { collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 
-// REMOVIDO: import OrganizaUniLogo from './organizauni_logo.jpg';
-
 // Dados de exemplo para tipos de evento e status
 const eventTypes = [
   'Palestra',
@@ -273,31 +271,39 @@ function App() {
 
   // Efeito para inicializar a autenticação Firebase e configurar o listener de estado de autenticação
   useEffect(() => {
-    initializeAuth(); // Chama a função de inicialização de autenticação
-
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUserId(user.uid);
-        setCurrentUser(user); // Define o usuário logado
-      } else {
-        setUserId(crypto.randomUUID()); // Gera um UUID aleatório para usuários não autenticados
-        setCurrentUser(null); // Limpa o usuário logado
+    const setupAuth = async () => {
+      try {
+        await initializeAuth(); // Await the initial auth attempt
+        console.log("Initial Firebase Auth attempt completed.");
+      } catch (error) {
+        console.error("Failed initial Firebase Auth setup:", error);
+        // Opcional: mostrar uma mensagem de erro crítica na UI aqui
       }
-      setIsAuthReady(true); // Marca a autenticação como pronta
-    });
 
-    return () => unsubscribeAuth(); // Limpa o listener ao desmontar o componente
+      const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+        if (user) {
+          setUserId(user.uid);
+          setCurrentUser(user);
+          console.log("Auth state changed: User is", user.isAnonymous ? "Anonymous" : user.email);
+        } else {
+          setUserId(crypto.randomUUID()); // Gera um UUID aleatório para usuários não autenticados
+          setCurrentUser(null);
+          console.log("Auth state changed: No user (logged out)");
+        }
+        setIsAuthReady(true); // Define true SOMENTE depois que o primeiro estado de autenticação for determinado
+      });
+
+      return () => unsubscribeAuth();
+    };
+
+    setupAuth(); // Chama a função de configuração assíncrona
+
   }, []); // Executa apenas uma vez na montagem inicial
 
-  // Efeito para redirecionar se o usuário tentar acessar /admin sem autenticação
-  // Este useEffect agora está em AuthRedirector, que é um componente filho de BrowserRouter
-  // e, portanto, pode usar useNavigate.
-
-  // Efeito para carregar eventos do Firestore (executa apenas quando a autenticação está pronta)
+  // Efeito para carregar eventos do Firestore
   useEffect(() => {
-    // Só tenta carregar se a autenticação estiver pronta e userId existir
-    if (!isAuthReady || !userId) {
-      console.log("Autenticação não pronta ou userId ausente, pulando a busca de eventos.");
+    if (!isAuthReady) {
+      console.log("Autenticação não pronta, pulando a busca de eventos.");
       return;
     }
 
@@ -311,14 +317,14 @@ function App() {
         ...doc.data()
       }));
       setEvents(fetchedEvents);
-      console.log("[App] Eventos carregados do Firestore (raw):", fetchedEvents); // Log de dados brutos do Firestore
+      console.log("[App] Eventos carregados do Firestore (raw):", fetchedEvents);
     }, (error) => {
       console.error("Erro ao buscar eventos do Firestore:", error);
-      openMessageModal('Erro ao carregar eventos. Verifique sua conexão ou permissões.');
+      openMessageModal('Erro ao carregar eventos. Verifique sua conexão ou permissões. (Código: ' + error.code + ')');
     });
 
-    return () => unsubscribeFirestore(); // Limpa o listener ao desmontar
-  }, [db, isAuthReady, userId, appId]); // Dependências para re-executar o efeito
+    return () => unsubscribeFirestore();
+  }, [db, isAuthReady, appId]); // Removido userId do array de dependências
 
   // Função para abrir o modal de mensagem
   const openMessageModal = (msg) => {
