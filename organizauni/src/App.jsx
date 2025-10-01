@@ -486,31 +486,37 @@ function App() {
       const newFormData = event
         ? { ...event, tipo: initialType }
         : {
-            titulo: '',
-            tipo: initialType, // Garante que o tipo seja 'Palestra' por padrão
-            descricao: '',
-            dataInicio: '',
-            dataFim: '',
-            local: '',
-            palestrantes: '',
-            vagasDisponiveis: 0,
-            status: eventStatuses[0],
-            requisitosInscricao: '',
-            imagemBanner: '',
-            departamento: '',
-          };
+          titulo: '',
+          tipo: initialType, // Garante que o tipo seja 'Palestra' por padrão
+          descricao: '',
+          dataInicio: '',
+          dataFim: '',
+          local: '',
+          palestrantes: '',
+          vagasDisponiveis: 0,
+          status: eventStatuses[0],
+          requisitosInscricao: '',
+          imagemBanner: '',
+          departamento: '',
+        };
       console.log("[EventForm] Initializing formData with tipo:", newFormData.tipo);
       setFormData(newFormData);
     }, [event]);
-
+    
+    // ######################################################
+    // ##                 CÓDIGO CORRIGIDO                 ##
+    // ######################################################
     const handleChange = (e) => {
-      const { name, value, type, checked } = e.target;
-      console.log(`[EventForm] handleChange - Name: ${name}, Value: "${value}"`); // Log detalhado
-      setFormData({
-        ...formData,
-        [name]: type === 'checkbox' ? checked : (typeof value === 'string' ? value.trim() : value), // Adicionado .trim()
-      });
+        const { name, value, type, checked } = e.target;
+        // Apenas atualizamos o estado com o valor exato do input, sem .trim()
+        setFormData({
+            ...formData,
+            [name]: type === 'checkbox' ? checked : value,
+        });
     };
+    // ######################################################
+    // ##                  FIM DA CORREÇÃO                 ##
+    // ######################################################
 
     const handleSubmit = (e) => {
       e.preventDefault();
